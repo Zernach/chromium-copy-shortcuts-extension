@@ -1,7 +1,24 @@
+function __copyShortcutsContextValid() {
+  try {
+    return !!(chrome && chrome.runtime && chrome.runtime.id);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function __copyShortcutsSafeGet(keys) {
+  if (!__copyShortcutsContextValid()) return {};
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (_) {
+    return {};
+  }
+}
+
 if (window.__copyShortcutsContentLoaded) {
   // Already injected in this frame; just sync visibility with current state.
   (async () => {
-    const r = await chrome.storage.local.get('locked');
+    const r = await __copyShortcutsSafeGet('locked');
     if (r.locked && !document.getElementById('__copy-shortcuts-overlay__')) {
       window.__copyShortcutsShow && window.__copyShortcutsShow();
     }
@@ -63,11 +80,13 @@ function applyPanelPosition(iframe, position) {
 
 async function showPanel() {
   if (document.getElementById(PANEL_ID)) return;
-  const stored = await chrome.storage.local.get(POSITION_KEY);
+  if (!__copyShortcutsContextValid()) return;
+  const stored = await __copyShortcutsSafeGet(POSITION_KEY);
+  if (!__copyShortcutsContextValid()) return;
   const iframe = document.createElement('iframe');
   iframe.id = PANEL_ID;
   iframe.src = chrome.runtime.getURL('popup.html?embedded=1');
-  iframe.title = 'Copy Shortcuts';
+  iframe.title = 'Quick Copies';
   iframe.setAttribute('allow', 'clipboard-write');
   Object.assign(iframe.style, {
     position: 'fixed',
@@ -87,10 +106,20 @@ async function showPanel() {
   messageHandler = (event) => {
     if (event.source !== iframe.contentWindow) return;
     const data = event.data;
-    if (!data || data.type !== 'copy-shortcuts-resize') return;
-    if (typeof data.height !== 'number' || !isFinite(data.height)) return;
-    lastReportedHeight = data.height;
-    iframe.style.height = `${clampPanelHeight(data.height)}px`;
+    if (!data) return;
+    if (data.type === 'copy-shortcuts-resize') {
+      if (typeof data.height !== 'number' || !isFinite(data.height)) return;
+      lastReportedHeight = data.height;
+      iframe.style.height = `${clampPanelHeight(data.height)}px`;
+      return;
+    }
+    if (data.type === 'copy-shortcuts-position') {
+      applyPanelPosition(iframe, data.position);
+      return;
+    }
+    if (data.type === 'copy-shortcuts-orphan') {
+      hidePanel();
+    }
   };
   resizeHandler = () => {
     if (lastReportedHeight > 0) {
@@ -110,20 +139,22 @@ function hidePanel() {
 window.__copyShortcutsShow = showPanel;
 window.__copyShortcutsHide = hidePanel;
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes[LOCK_KEY]) {
-    if (changes[LOCK_KEY].newValue) showPanel();
-    else hidePanel();
-  }
-  if (changes[POSITION_KEY]) {
-    const el = document.getElementById(PANEL_ID);
-    if (el) applyPanelPosition(el, changes[POSITION_KEY].newValue);
-  }
-});
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes[LOCK_KEY]) {
+      if (changes[LOCK_KEY].newValue) showPanel();
+      else hidePanel();
+    }
+    if (changes[POSITION_KEY]) {
+      const el = document.getElementById(PANEL_ID);
+      if (el) applyPanelPosition(el, changes[POSITION_KEY].newValue);
+    }
+  });
+} catch (_) { /* extension context invalidated */ }
 
 (async () => {
-  const r = await chrome.storage.local.get(LOCK_KEY);
+  const r = await __copyShortcutsSafeGet(LOCK_KEY);
   if (r[LOCK_KEY]) showPanel();
 })();
 

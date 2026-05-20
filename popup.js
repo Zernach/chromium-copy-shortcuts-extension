@@ -3,6 +3,7 @@ const DRAFT_KEY = 'draft';
 const LOCK_KEY = 'locked';
 const FORM_STATE_KEY = 'formState';
 const POSITION_KEY = 'panelPosition';
+const POSITION_MENU_OPEN_KEY = 'positionMenuOpen';
 const PREVIEW_MAX = 48;
 const VALID_POSITIONS = ['upper-left', 'upper-right', 'lower-left', 'lower-right'];
 const DEFAULT_POSITION = 'upper-right';
@@ -27,6 +28,65 @@ const els = {
 
 let toastTimer = null;
 let editingId = null;
+let extensionOrphaned = false;
+
+function isExtensionContextValid() {
+  try {
+    return !!(chrome && chrome.runtime && chrome.runtime.id);
+  } catch (_) {
+    return false;
+  }
+}
+
+function isContextInvalidatedError(err) {
+  const msg = err && (err.message || String(err));
+  return typeof msg === 'string' && msg.indexOf('Extension context invalidated') !== -1;
+}
+
+function handleOrphaned() {
+  if (extensionOrphaned) return;
+  extensionOrphaned = true;
+  try {
+    window.parent.postMessage({ type: 'copy-shortcuts-orphan' }, '*');
+  } catch (_) { /* no parent or cross-origin restriction */ }
+}
+
+async function safeStorageGet(keys) {
+  if (!isExtensionContextValid()) {
+    handleOrphaned();
+    return {};
+  }
+  try {
+    return await chrome.storage.local.get(keys);
+  } catch (err) {
+    if (isContextInvalidatedError(err)) handleOrphaned();
+    return {};
+  }
+}
+
+async function safeStorageSet(items) {
+  if (!isExtensionContextValid()) {
+    handleOrphaned();
+    return;
+  }
+  try {
+    await chrome.storage.local.set(items);
+  } catch (err) {
+    if (isContextInvalidatedError(err)) handleOrphaned();
+  }
+}
+
+async function safeStorageRemove(keys) {
+  if (!isExtensionContextValid()) {
+    handleOrphaned();
+    return;
+  }
+  try {
+    await chrome.storage.local.remove(keys);
+  } catch (err) {
+    if (isContextInvalidatedError(err)) handleOrphaned();
+  }
+}
 
 function isEmbedded() {
   try {
@@ -38,13 +98,29 @@ function isEmbedded() {
 
 function setupHeightReporting() {
   let pending = false;
+  const measureMainContent = (main) => {
+    if (!main) return 0;
+    const style = getComputedStyle(main);
+    const padTop = parseFloat(style.paddingTop) || 0;
+    const padBottom = parseFloat(style.paddingBottom) || 0;
+    const gap = parseFloat(style.rowGap) || parseFloat(style.gap) || 0;
+    let contentH = 0;
+    let visible = 0;
+    for (const child of main.children) {
+      if (child.hidden || child.offsetParent === null) continue;
+      contentH += child.getBoundingClientRect().height;
+      visible += 1;
+    }
+    if (visible > 1) contentH += gap * (visible - 1);
+    return contentH + padTop + padBottom;
+  };
   const send = () => {
     pending = false;
     const header = document.querySelector('.app-header');
     const main = document.querySelector('.app-main');
     const footer = els.footer;
     const headerH = header ? header.offsetHeight : 0;
-    const mainH = main ? main.scrollHeight : 0;
+    const mainH = measureMainContent(main);
     const footerH = footer && !footer.hidden ? footer.offsetHeight : 0;
     const total = Math.ceil(headerH + mainH + footerH);
     try {
@@ -76,34 +152,34 @@ function setupHeightReporting() {
 }
 
 async function loadShortcuts() {
-  const result = await chrome.storage.local.get(STORAGE_KEY);
+  const result = await safeStorageGet(STORAGE_KEY);
   return Array.isArray(result[STORAGE_KEY]) ? result[STORAGE_KEY] : [];
 }
 
 async function saveShortcuts(shortcuts) {
-  await chrome.storage.local.set({ [STORAGE_KEY]: shortcuts });
+  await safeStorageSet({ [STORAGE_KEY]: shortcuts });
 }
 
 async function loadDraft() {
-  const result = await chrome.storage.local.get(DRAFT_KEY);
+  const result = await safeStorageGet(DRAFT_KEY);
   return typeof result[DRAFT_KEY] === 'string' ? result[DRAFT_KEY] : '';
 }
 
 async function saveDraft(text) {
-  await chrome.storage.local.set({ [DRAFT_KEY]: text });
+  await safeStorageSet({ [DRAFT_KEY]: text });
 }
 
 async function clearDraft() {
-  await chrome.storage.local.remove(DRAFT_KEY);
+  await safeStorageRemove(DRAFT_KEY);
 }
 
 async function getLockState() {
-  const r = await chrome.storage.local.get(LOCK_KEY);
+  const r = await safeStorageGet(LOCK_KEY);
   return !!r[LOCK_KEY];
 }
 
 async function setLockState(locked) {
-  await chrome.storage.local.set({ [LOCK_KEY]: !!locked });
+  await safeStorageSet({ [LOCK_KEY]: !!locked });
 }
 
 function normalizePosition(value) {
@@ -111,12 +187,21 @@ function normalizePosition(value) {
 }
 
 async function getPosition() {
-  const r = await chrome.storage.local.get(POSITION_KEY);
+  const r = await safeStorageGet(POSITION_KEY);
   return normalizePosition(r[POSITION_KEY]);
 }
 
 async function setPosition(position) {
-  await chrome.storage.local.set({ [POSITION_KEY]: normalizePosition(position) });
+  await safeStorageSet({ [POSITION_KEY]: normalizePosition(position) });
+}
+
+async function getPositionMenuOpen() {
+  const r = await safeStorageGet(POSITION_MENU_OPEN_KEY);
+  return !!r[POSITION_MENU_OPEN_KEY];
+}
+
+async function setPositionMenuOpen(open) {
+  await safeStorageSet({ [POSITION_MENU_OPEN_KEY]: !!open });
 }
 
 function normalizeFormState(value) {
@@ -128,12 +213,12 @@ function normalizeFormState(value) {
 }
 
 async function loadFormState() {
-  const r = await chrome.storage.local.get(FORM_STATE_KEY);
+  const r = await safeStorageGet(FORM_STATE_KEY);
   return normalizeFormState(r[FORM_STATE_KEY]);
 }
 
 async function saveFormState(state) {
-  await chrome.storage.local.set({ [FORM_STATE_KEY]: normalizeFormState(state) });
+  await safeStorageSet({ [FORM_STATE_KEY]: normalizeFormState(state) });
 }
 
 function updateLockUI(locked) {
@@ -145,7 +230,7 @@ function updateLockUI(locked) {
   if (els.positionWrap) {
     els.positionWrap.hidden = !locked;
   }
-  if (!locked) closePositionMenu();
+  if (!locked) setPositionMenuOpen(false);
 }
 
 function updatePositionUI(position) {
@@ -156,22 +241,10 @@ function updatePositionUI(position) {
   });
 }
 
-function openPositionMenu() {
+function applyPositionMenuOpen(open) {
   if (!els.positionMenu) return;
-  els.positionMenu.hidden = false;
-  els.positionBtn.setAttribute('aria-expanded', 'true');
-}
-
-function closePositionMenu() {
-  if (!els.positionMenu) return;
-  els.positionMenu.hidden = true;
-  els.positionBtn.setAttribute('aria-expanded', 'false');
-}
-
-function togglePositionMenu() {
-  if (!els.positionMenu) return;
-  if (els.positionMenu.hidden) openPositionMenu();
-  else closePositionMenu();
+  els.positionMenu.hidden = !open;
+  els.positionBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 function isInjectableUrl(url) {
@@ -180,20 +253,29 @@ function isInjectableUrl(url) {
 }
 
 async function ensureOverlayInAllTabs() {
+  if (!isExtensionContextValid()) {
+    handleOrphaned();
+    return { injected: 0, supported: false };
+  }
   if (!chrome.scripting || !chrome.scripting.executeScript || !chrome.tabs) {
     return { injected: 0, supported: false };
   }
-  const tabs = await chrome.tabs.query({});
-  const targets = tabs.filter((t) => t.id != null && isInjectableUrl(t.url));
-  await Promise.allSettled(
-    targets.map((t) =>
-      chrome.scripting.executeScript({
-        target: { tabId: t.id, allFrames: false },
-        files: ['content.js'],
-      })
-    )
-  );
-  return { injected: targets.length, supported: true };
+  try {
+    const tabs = await chrome.tabs.query({});
+    const targets = tabs.filter((t) => t.id != null && isInjectableUrl(t.url));
+    await Promise.allSettled(
+      targets.map((t) =>
+        chrome.scripting.executeScript({
+          target: { tabId: t.id, allFrames: false },
+          files: ['content.js'],
+        })
+      )
+    );
+    return { injected: targets.length, supported: true };
+  } catch (err) {
+    if (isContextInvalidatedError(err)) handleOrphaned();
+    return { injected: 0, supported: false };
+  }
 }
 
 async function toggleLock() {
@@ -424,17 +506,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupHeightReporting();
   }
 
-  const [shortcuts, draft, locked, formState, position] = await Promise.all([
+  const [shortcuts, draft, locked, formState, position, positionMenuOpen] = await Promise.all([
     loadShortcuts(),
     loadDraft(),
     getLockState(),
     loadFormState(),
     getPosition(),
+    getPositionMenuOpen(),
   ]);
   editingId = formState.editingId;
   renderShortcuts(shortcuts);
   updatePositionUI(position);
   updateLockUI(locked);
+  applyPositionMenuOpen(locked && positionMenuOpen);
   applyFormState(formState);
   if (formState.open) {
     els.textarea.value = draft;
@@ -447,25 +531,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   els.positionBtn.addEventListener('click', (event) => {
     event.stopPropagation();
-    togglePositionMenu();
+    setPositionMenuOpen(els.positionMenu.hidden);
   });
 
   els.positionOptions.forEach((opt) => {
     opt.addEventListener('click', async (event) => {
       event.stopPropagation();
-      await setPosition(opt.dataset.position);
-      closePositionMenu();
+      const next = opt.dataset.position;
+      updatePositionUI(next);
+      if (isEmbedded()) {
+        try {
+          window.parent.postMessage({ type: 'copy-shortcuts-position', position: next }, '*');
+        } catch (_) { /* no parent or cross-origin restriction */ }
+      }
+      await setPosition(next);
+      setPositionMenuOpen(false);
     });
   });
 
   document.addEventListener('click', (event) => {
     if (!els.positionMenu || els.positionMenu.hidden) return;
-    if (!els.positionWrap.contains(event.target)) closePositionMenu();
+    if (!els.positionWrap.contains(event.target)) setPositionMenuOpen(false);
   });
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && els.positionMenu && !els.positionMenu.hidden) {
-      closePositionMenu();
+      setPositionMenuOpen(false);
     }
   });
 
@@ -484,21 +575,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes[STORAGE_KEY]) {
-    renderShortcuts(changes[STORAGE_KEY].newValue || []);
-  }
-  if (changes[LOCK_KEY]) {
-    updateLockUI(!!changes[LOCK_KEY].newValue);
-  }
-  if (changes[FORM_STATE_KEY]) {
-    applyFormState(changes[FORM_STATE_KEY].newValue);
-  }
-  if (changes[DRAFT_KEY]) {
-    applyDraftToTextarea(changes[DRAFT_KEY].newValue || '');
-  }
-  if (changes[POSITION_KEY]) {
-    updatePositionUI(changes[POSITION_KEY].newValue);
-  }
-});
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (changes[STORAGE_KEY]) {
+      renderShortcuts(changes[STORAGE_KEY].newValue || []);
+    }
+    if (changes[LOCK_KEY]) {
+      updateLockUI(!!changes[LOCK_KEY].newValue);
+    }
+    if (changes[FORM_STATE_KEY]) {
+      applyFormState(changes[FORM_STATE_KEY].newValue);
+    }
+    if (changes[DRAFT_KEY]) {
+      applyDraftToTextarea(changes[DRAFT_KEY].newValue || '');
+    }
+    if (changes[POSITION_KEY]) {
+      updatePositionUI(changes[POSITION_KEY].newValue);
+    }
+    if (changes[POSITION_MENU_OPEN_KEY]) {
+      applyPositionMenuOpen(!!changes[POSITION_MENU_OPEN_KEY].newValue);
+    }
+  });
+} catch (err) {
+  if (isContextInvalidatedError(err)) handleOrphaned();
+}
