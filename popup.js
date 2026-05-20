@@ -1,5 +1,6 @@
 const STORAGE_KEY = 'shortcuts';
 const DRAFT_KEY = 'draft';
+const LOCK_KEY = 'locked';
 const PREVIEW_MAX = 48;
 
 const els = {
@@ -10,6 +11,7 @@ const els = {
   newBtn: document.getElementById('new-btn'),
   cancelBtn: document.getElementById('cancel-btn'),
   toast: document.getElementById('toast'),
+  lockBtn: document.getElementById('lock-btn'),
 };
 
 let toastTimer = null;
@@ -34,6 +36,61 @@ async function saveDraft(text) {
 
 async function clearDraft() {
   await chrome.storage.local.remove(DRAFT_KEY);
+}
+
+async function getLockState() {
+  const r = await chrome.storage.local.get(LOCK_KEY);
+  return !!r[LOCK_KEY];
+}
+
+async function setLockState(locked) {
+  await chrome.storage.local.set({ [LOCK_KEY]: !!locked });
+}
+
+function updateLockUI(locked) {
+  if (!els.lockBtn) return;
+  els.lockBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  const label = locked ? 'Unlock panel (dismiss on outside click)' : 'Lock panel open';
+  els.lockBtn.setAttribute('aria-label', label);
+  els.lockBtn.title = label;
+}
+
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+function isInjectableUrl(url) {
+  if (!url) return false;
+  return /^https?:\/\//i.test(url) || /^file:\/\//i.test(url);
+}
+
+async function ensureOverlayInTab(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content.js'],
+  });
+}
+
+async function toggleLock() {
+  const next = !(await getLockState());
+  await setLockState(next);
+  updateLockUI(next);
+
+  if (next) {
+    const tab = await getActiveTab();
+    if (!tab || !isInjectableUrl(tab.url)) {
+      showToast("Can't show panel on this page");
+      return;
+    }
+    try {
+      await ensureOverlayInTab(tab.id);
+    } catch (err) {
+      showToast("Can't show panel on this page");
+      return;
+    }
+    window.close();
+  }
 }
 
 function makeId() {
@@ -156,8 +213,13 @@ async function handleSubmit(event) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const [shortcuts, draft] = await Promise.all([loadShortcuts(), loadDraft()]);
+  const [shortcuts, draft, locked] = await Promise.all([
+    loadShortcuts(),
+    loadDraft(),
+    getLockState(),
+  ]);
   renderShortcuts(shortcuts);
+  updateLockUI(locked);
 
   if (draft) {
     showForm(draft);
@@ -166,6 +228,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   els.newBtn.addEventListener('click', () => showForm());
   els.cancelBtn.addEventListener('click', hideForm);
   els.form.addEventListener('submit', handleSubmit);
+  els.lockBtn.addEventListener('click', toggleLock);
 
   els.textarea.addEventListener('input', () => {
     saveDraft(els.textarea.value);
@@ -183,7 +246,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes[STORAGE_KEY]) {
+  if (area !== 'local') return;
+  if (changes[STORAGE_KEY]) {
     renderShortcuts(changes[STORAGE_KEY].newValue || []);
+  }
+  if (changes[LOCK_KEY]) {
+    updateLockUI(!!changes[LOCK_KEY].newValue);
   }
 });
