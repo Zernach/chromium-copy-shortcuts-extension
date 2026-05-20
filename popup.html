@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="color-scheme" content="dark">
+  <title>Copy Shortcuts</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Copy Shortcuts</h1>
+  </header>
+
+  <main class="app-main">
+    <ul id="shortcuts-list" class="shortcuts-list" aria-label="Saved shortcuts"></ul>
+
+    <p id="empty-state" class="empty-state" hidden>
+      No shortcuts yet. Click below to add one.
+    </p>
+
+    <form id="add-form" class="add-form" hidden>
+      <label for="shortcut-text" class="form-label">New shortcut text</label>
+      <textarea
+        id="shortcut-text"
+        class="form-textarea"
+        placeholder="Type or paste the text you want to save…"
+        rows="4"
+        required
+      ></textarea>
+      <div class="form-actions">
+        <button type="button" id="cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button type="submit" id="save-btn" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+
+    <button id="new-btn" type="button" class="btn btn-primary btn-block">
+      <span class="btn-icon" aria-hidden="true">+</span>
+      <span>New Shortcut</span>
+    </button>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
