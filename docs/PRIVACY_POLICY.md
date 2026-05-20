@@ -62,4 +62,4 @@ If this policy is updated, the revised version will be published in this reposit
 
 ## Contact
 
-Questions about this policy can be directed to the maintainer through the GitHub repository's issue tracker.
+Questions about this policy can be directed to the Ryan Zernach
